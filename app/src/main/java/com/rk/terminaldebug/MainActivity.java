@@ -1,11 +1,18 @@
 package com.rk.terminaldebug;
 
+import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.location.LocationManager;
+import android.os.Build;
+import android.provider.Settings;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.support.v7.widget.LinearLayoutManager;
@@ -25,6 +32,7 @@ public class MainActivity extends AppCompatActivity {
     private final static String TAG = "Ble" + MainActivity.class.getSimpleName();
 
     private static final int REQUEST_ENABLE_BT = 1;
+    private static final int REQUEST_ENABLE_LACATION = 2;
 
     private Button mScanDeviceBtn;
     private RecyclerView mBleDeviceListView;
@@ -62,7 +70,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View v) {
                 if (BLUETOOTH_ADAPTER == null) {
-                    Toast.makeText(MainActivity.this, "Not Support BLE！", Toast.LENGTH_LONG);
+                    Toast.makeText(MainActivity.this, "Not Support BLE！", Toast.LENGTH_LONG).show();
                     return;
                 }
 
@@ -71,18 +79,59 @@ public class MainActivity extends AppCompatActivity {
                     startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
                     return;
                 }
+
+                if (!isLocationOpen(MainActivity.this)) {
+                    Log.i(TAG, "onClick, Build.VERSION.SDK_INT: " + Build.VERSION.SDK_INT);
+                    if(Build.VERSION.SDK_INT >= 23) {
+                        Intent enableLocate = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+                        startActivityForResult(enableLocate, REQUEST_ENABLE_LACATION);
+                    }
+                } else {
+                    Toast.makeText(MainActivity.this, "Not Location service, please open GPS", Toast.LENGTH_LONG).show();
+                }
                 mBleList.clear();
                 BLUETOOTH_ADAPTER.startDiscovery();
             }
         });
     }
 
+    /**
+     * Judge If location function is opened.
+     */
+    public static boolean isLocationOpen(final Context context) {
+        Log.i(TAG, "isLocationOpen");
+        LocationManager manager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+        return manager.isProviderEnabled(LocationManager.GPS_PROVIDER);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        Log.i(TAG, "onActivityResult, resultCode: " + resultCode);
         if (requestCode == REQUEST_ENABLE_BT) {
             if (resultCode == RESULT_OK) {
-                Toast.makeText(this, "Ble Already Opened", Toast.LENGTH_LONG);
+                Toast.makeText(this, "Ble Already Opened", Toast.LENGTH_LONG).show();
             }
+        } else if (resultCode == REQUEST_ENABLE_LACATION) {
+            if (resultCode == RESULT_OK) {
+                Toast.makeText(this, "Locate Service Opened", Toast.LENGTH_LONG).show();
+            }
+            //Android6.0需要动态申请权限
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) {
+                //请求权限
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION},
+                        REQUEST_ENABLE_LACATION);
+                if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+                        Manifest.permission.ACCESS_COARSE_LOCATION)) {
+                    //判断是否需要解释
+                    Toast.makeText(this, "需要蓝牙权限", Toast.LENGTH_SHORT).show();
+                    finish();
+                }
+            }
+        } else {
+            //若未开启位置信息功能，则退出该应用
+            finish();
         }
     }
 
