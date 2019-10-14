@@ -33,6 +33,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final int REQUEST_ENABLE_BT = 1;
     private static final int REQUEST_ENABLE_LACATION = 2;
+    private static final int REQUEST_ACCESS_COARSE_LOCATION = 3;
 
     private Button mScanDeviceBtn;
     private RecyclerView mBleDeviceListView;
@@ -82,12 +83,13 @@ public class MainActivity extends AppCompatActivity {
 
                 if (!isLocationOpen(MainActivity.this)) {
                     Log.i(TAG, "onClick, Build.VERSION.SDK_INT: " + Build.VERSION.SDK_INT);
-                    if(Build.VERSION.SDK_INT >= 23) {
+                    if (Build.VERSION.SDK_INT >= 23) {
                         Intent enableLocate = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
                         startActivityForResult(enableLocate, REQUEST_ENABLE_LACATION);
+                        return;
                     }
                 } else {
-                    Toast.makeText(MainActivity.this, "Not Location service, please open GPS", Toast.LENGTH_LONG).show();
+                    dynamicRequestPermission();
                 }
                 mBleList.clear();
                 BLUETOOTH_ADAPTER.startDiscovery();
@@ -114,24 +116,26 @@ public class MainActivity extends AppCompatActivity {
         } else if (resultCode == REQUEST_ENABLE_LACATION) {
             if (resultCode == RESULT_OK) {
                 Toast.makeText(this, "Locate Service Opened", Toast.LENGTH_LONG).show();
+                dynamicRequestPermission();
             }
-            //Android6.0需要动态申请权限
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
-                    != PackageManager.PERMISSION_GRANTED) {
-                //请求权限
-                ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION},
-                        REQUEST_ENABLE_LACATION);
-                if (ActivityCompat.shouldShowRequestPermissionRationale(this,
-                        Manifest.permission.ACCESS_COARSE_LOCATION)) {
-                    //判断是否需要解释
-                    Toast.makeText(this, "需要蓝牙权限", Toast.LENGTH_SHORT).show();
-                    finish();
-                }
+
+        }
+    }
+
+    private void dynamicRequestPermission() {
+        Log.i(TAG, "dynamicRequestPermission");
+        //Android6.0需要动态申请权限
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            //请求权限
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION},
+                    REQUEST_ACCESS_COARSE_LOCATION);
+            if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+                    Manifest.permission.ACCESS_COARSE_LOCATION)) {
+                //判断是否需要解释
+                Toast.makeText(this, "需要蓝牙权限....", Toast.LENGTH_SHORT).show();
             }
-        } else {
-            //若未开启位置信息功能，则退出该应用
-            finish();
         }
     }
 
