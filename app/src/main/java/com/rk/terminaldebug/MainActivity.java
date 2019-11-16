@@ -3,6 +3,12 @@ package com.rk.terminaldebug;
 import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattService;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -10,6 +16,7 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.location.LocationManager;
 import android.os.Build;
+import android.os.Handler;
 import android.provider.Settings;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
@@ -26,7 +33,9 @@ import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
     private final static String TAG = "Ble" + MainActivity.class.getSimpleName();
@@ -39,15 +48,136 @@ public class MainActivity extends AppCompatActivity {
     private RecyclerView mBleDeviceListView;
     private BleDeviceItemAdapter mBleDeviceItemAdapter;
 
+    private Object mSyncObj = new Object();
+    private class HandleReadCharacteristicThread extends Thread {
+        ArrayList<BluetoothGattCharacteristic> mReadCharacteristicList;
+        public void setReadCharacteristicListList(ArrayList<BluetoothGattCharacteristic> list) {
+            mReadCharacteristicList = list;
+        }
+
+        @Override
+        public void run() {
+            if (mReadCharacteristicList != null && mReadCharacteristicList.size() > 0) {
+                for (int i = 0; i < mReadCharacteristicList.size(); i++) {
+                    BluetoothGattCharacteristic characteristic = mReadCharacteristicList.get(i);
+                    synchronized (mSyncObj) {
+                        boolean readDone = false;
+
+                        if (mBluetoothGatt != null) {
+                            readDone = mBluetoothGatt.readCharacteristic(characteristic);
+                        }
+                        Log.i(TAG, "run characteristic uuid: " + characteristic.getUuid() + " ,readDone: " + readDone);
+                        try {
+                            mSyncObj.wait();
+                        } catch (Exception e) {
+                            Log.e(TAG, "run, wait error: " + e.getMessage());
+                        }
+                    }
+                }
+
+            }
+        }
+
+    }
+
+    private BluetoothGatt mBluetoothGatt;
+    private final BluetoothGattCallback mGattCallback = new BluetoothGattCallback() {
+        @Override
+        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                Log.i(TAG, "Connected to GATT server.");
+                //Attempting to start service discovery
+                boolean isStarted = mBluetoothGatt.discoverServices();
+                Log.i(TAG, "onConnectionStateChange, is Started to discover services: " + isStarted);
+
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.i(TAG, "Disconnected from GATT server.");
+            }
+        }
+
+
+        @Override
+        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+            super.onServicesDiscovered(gatt, status);
+            Log.i(TAG, "onServicesDiscovered, status: " + status);
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                List<BluetoothGattService> servicesList = mBluetoothGatt.getServices();
+                ArrayList<BluetoothGattCharacteristic> list = new ArrayList<>();
+                for (int i = 0; i < servicesList.size(); i++) {
+                    Log.i(TAG, "onServicesDiscovered, service[" + i + "]: " + servicesList.get(i).getUuid());
+                    final List<BluetoothGattCharacteristic> characteristicsList = servicesList.get(i).getCharacteristics();
+                    for (int j = 0; j < characteristicsList.size(); j++) {
+                        final BluetoothGattCharacteristic characteristic = characteristicsList.get(j);
+                        String uuid = characteristic.getUuid().toString();
+                        Log.i(TAG, "onServicesDiscovered, characteristic[" + j + "]: " + uuid);
+                        if ("00002a26-0000-1000-8000-00805f9b34fb".equals(uuid)
+                                || "00002a27-0000-1000-8000-00805f9b34fb".equals(uuid)
+                                || "00002a28-0000-1000-8000-00805f9b34fb".equals(uuid)
+                                || "00002a29-0000-1000-8000-00805f9b34fb".equals(uuid)) {
+                            list.add(characteristic);
+
+
+                        }
+                    }
+                }
+                HandleReadCharacteristicThread thread = new HandleReadCharacteristicThread();
+                thread.setReadCharacteristicListList(list);
+                thread.start();
+            }
+
+        }
+
+        @Override
+        public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            super.onCharacteristicRead(gatt, characteristic, status);
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                try {
+                    Log.i(TAG, "onCharacteristicRead, UUID: " + characteristic.getUuid().toString()
+                            + ", read data: " + new String(characteristic.getValue(), "utf-8"));
+                } catch (UnsupportedEncodingException e) {
+                    Log.e(TAG, "onCharacteristicRead, error: " + e.getMessage());
+                }
+                synchronized (mSyncObj) {
+                    mSyncObj.notify();
+                }
+
+            }
+        }
+    };
+
     private ArrayList<BluetoothDevice> mBleList = new ArrayList<>();
 
-    private static final BluetoothAdapter BLUETOOTH_ADAPTER = BluetoothAdapter.getDefaultAdapter();
+    private static BluetoothAdapter sBluetoothAdapter;
+
+    private BluetoothAdapter.LeScanCallback mLeScanCallback = new BluetoothAdapter.LeScanCallback() {
+        @Override
+        public void onLeScan(final BluetoothDevice device, int rssi,
+                             byte[] scanRecord) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (device != null) {
+                        Log.i(TAG, "onLeScan, device: " + device.getName() + ", device mac: " + device.getAddress());
+                        mBleList.add(device);
+                    }
+
+                    if (mBleDeviceItemAdapter != null) {
+                        Log.i(TAG, "onLeScan, data size : " + mBleDeviceItemAdapter.getItemCount());
+                        mBleDeviceItemAdapter.notifyDataSetChanged();
+                    }
+
+                }
+            });
+        }
+    };
 
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        final BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        sBluetoothAdapter = bluetoothManager.getAdapter();
         initView();
         initEvent();
         IntentFilter bleIntentFilter = new IntentFilter();
@@ -70,12 +200,12 @@ public class MainActivity extends AppCompatActivity {
         mScanDeviceBtn.setOnClickListener(new View.OnClickListener(){
             @Override
             public void onClick(View v) {
-                if (BLUETOOTH_ADAPTER == null) {
+                if (sBluetoothAdapter == null) {
                     Toast.makeText(MainActivity.this, "Not Support BLE！", Toast.LENGTH_LONG).show();
                     return;
                 }
 
-                if (!BLUETOOTH_ADAPTER.isEnabled()) {
+                if (!sBluetoothAdapter.isEnabled()) {
                     Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
                     startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
                     return;
@@ -92,7 +222,14 @@ public class MainActivity extends AppCompatActivity {
                     dynamicRequestPermission();
                 }
                 mBleList.clear();
-                BLUETOOTH_ADAPTER.startDiscovery();
+                sBluetoothAdapter.startDiscovery();
+                new Handler().postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        sBluetoothAdapter.cancelDiscovery();
+
+                    }
+                }, 10000);
             }
         });
     }
@@ -188,7 +325,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
-        public void onBindViewHolder(BleDeviceVH holder, int position) {
+        public void onBindViewHolder(BleDeviceVH holder, final int position) {
             Log.i(TAG, "onBindViewHolder, position: " + position);
             holder.BleName.setText(mBleList.get(position).getName());
             holder.BleSigStrength.setText("99   ");
@@ -196,6 +333,10 @@ public class MainActivity extends AppCompatActivity {
             holder.itemView.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
+                    Log.i(TAG, "onBindView, setOnClickListener, onClick, position: " + position);
+                    BluetoothDevice device = mBleList.get(position);
+                    Log.i(TAG, "onClick, device: " + device.getName() + ", address: " + device.getAddress());
+                    mBluetoothGatt = device.connectGatt(MainActivity.this, true, mGattCallback);
                     //TODO: add click event, to connect ble device.
                 }
             });
